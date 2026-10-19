@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ==========================================
 # 0. الثوابت والتسميات والكليات المعتمدة
 # ==========================================
-DB_PATH = "university_integrated_platform_v10.db"
+DB_PATH = "university_integrated_platform_v15.db"
 
 FACULTIES = [
     "كلية العلوم والتكنولوجيا",
@@ -26,7 +26,7 @@ FACULTIES = [
 ]
 
 ROLE_LABELS = {
-    "INCUBATOR": "مدير الحاضنة",
+    "INCUBATOR": "مدير حاضنة",
     "VICE_DEAN": "نائب عميد",
 }
 
@@ -366,7 +366,7 @@ def df_to_pdf_bytes(df: pd.DataFrame, faculty_name: str) -> bytes:
 
     draw.rectangle([margin, 35, page_w - margin, 125], fill=(24, 62, 115))
     title_txt = _rtl_visual(f"قائمة المشاريع الابتكارية - {faculty_name}")
-    sub_txt = _rtl_visual(f"تاريخ الاستخراج: {now_str()} | حاضنة الأعمال الجامعية")
+    sub_txt = _rtl_visual(f"تاريخ الاستخراج: {now_str()} | مدير حاضنة")
     draw.text((page_w - margin - 25, 50), title_txt, font=font_title, fill="white", anchor="ra")
     draw.text((page_w - margin - 25, 90), sub_txt, font=font_sub, fill=(220, 232, 245), anchor="ra")
 
@@ -456,18 +456,6 @@ def init_db():
             updated_by TEXT,
             updated_at TEXT
         );
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            student_name TEXT NOT NULL,
-            mentor_name TEXT,
-            faculty TEXT NOT NULL,
-            season_year TEXT NOT NULL,
-            status TEXT NOT NULL,
-            pedagogical_notes TEXT,
-            created_at TEXT NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS resources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
@@ -488,7 +476,6 @@ def init_db():
             filename TEXT NOT NULL,
             file_ext TEXT NOT NULL,
             file_data BLOB NOT NULL,
-            project_id INTEGER REFERENCES projects(id),
             target_faculty TEXT NOT NULL,
             uploaded_by INTEGER NOT NULL REFERENCES users(id),
             created_at TEXT NOT NULL
@@ -498,7 +485,7 @@ def init_db():
 
     if q("SELECT COUNT(*) AS n FROM users", one=True)["n"] == 0:
         users = [
-            ("مدير الحاضنة", "INCUBATOR", "رئاسة الجامعة"),
+            ("مدير حاضنة", "INCUBATOR", "إدارة الحاضنة"),
             ("نائب عميد كلية العلوم والتكنولوجيا", "VICE_DEAN", "كلية العلوم والتكنولوجيا"),
             ("نائب عميد كلية العلوم الاقتصادية", "VICE_DEAN", "كلية العلوم الاقتصادية"),
             ("نائب عميد كلية الآداب واللغات والعلوم الاجتماعية", "VICE_DEAN", "كلية الآداب واللغات والعلوم الاجتماعية"),
@@ -622,20 +609,22 @@ def get_faculty_project_count(faculty_name: str, season: str) -> int:
 # 4. دالة بناء فضاء الكلية
 # ==========================================
 def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
-    st.subheader(f"🏛️ جدول المشاريع والوثائق المتبادلة — {faculty_name} (الموسم: {active_season})")
+    st.markdown(f"""
+        <div class="p-4 mb-4 bg-blue-50 border-r-4 border-blue-600 rounded-lg shadow-sm">
+            <h3 class="text-lg font-bold text-blue-900">🏛️ فضاء مشاريع {faculty_name} (الموسم: {active_season})</h3>
+            <p class="text-sm text-gray-600">إدارة الجداول والمشاريع الابتكارية الخاصة بالكلية.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
     role = current_user["role"]
     is_incubator = role == "INCUBATOR"
-    belongs_to_faculty = current_user["faculty"] == faculty_name
-    can_manage_faculty = is_incubator or (role == "VICE_DEAN" and belongs_to_faculty)
+    can_manage_faculty = is_incubator
 
-    dean_label = f"نائب عميد {faculty_name}"
-
-    if not can_manage_faculty:
-        st.info(f"ℹ️ أنت مسجل في «{current_user['faculty']}». هذا الفضاء مخصص لـ «{faculty_name}» (قراءة فقط).")
+    if not is_incubator:
+        st.info("ℹ️ أنت مسجل بصلاحية نائب العميد (قراءة واطلاع وتصدير فقط). التعديل والإضافة متاحان حصرياً لمدير الحاضنة.")
 
     if can_manage_faculty:
-        with st.expander(f"📥 استيراد ملف Excel لملء خانات جدول {faculty_name}", expanded=False):
+        with st.expander(f"📥 استيراد ملف Excel وتعديل جدول {faculty_name}", expanded=False):
             col_imp1, col_imp2 = st.columns([2, 1])
             with col_imp1:
                 imp_file = st.file_uploader(
@@ -706,7 +695,8 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
         },
     )
 
-    col_b1, col_b2, col_b3, col_b4 = st.columns([1.3, 2.1, 1.3, 1.3])
+    # تم حذف زر مشاركة الجدول تماماً بناءً على طلبك
+    col_b1, col_b2, col_b3 = st.columns([1.5, 1.5, 1.5])
 
     if can_manage_faculty:
         with col_b1:
@@ -715,43 +705,7 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
                 flash("تم حفظ التعديلات.")
                 st.rerun()
 
-        with col_b2:
-            share_btn_text = (
-                f"📤 حفظ ومشاركة مع {dean_label}"
-                if is_incubator
-                else "📤 حفظ ومشاركة الجدول مع مدير الحاضنة"
-            )
-            if st.button(share_btn_text, key=f"share_sheet_{tab_idx}", use_container_width=True):
-                save_faculty_df(faculty_name, active_season, edited_df, current_user["name"])
-                xlsx_bytes = df_to_xlsx_bytes(edited_df, sheet_name=faculty_name)
-                doc_title = f"جدول مشاريع {faculty_name} ({active_season})"
-
-                ex(
-                    """INSERT INTO documents (title, filename, file_ext, file_data,
-                                              project_id, target_faculty, uploaded_by, created_at)
-                       VALUES (?,?,?,?,?,?,?,?)""",
-                    (
-                        doc_title,
-                        f"جدول_مشاريع_{faculty_name.replace(' ', '_')}.xlsx",
-                        "xlsx",
-                        xlsx_bytes,
-                        None,
-                        faculty_name,
-                        current_user["id"],
-                        now_str(),
-                    ),
-                )
-                if is_incubator:
-                    recipients = users_by_filter(role="VICE_DEAN", faculty=faculty_name)
-                    notify(recipients, f"وصلك جدول المشاريع لـ {faculty_name} من مدير الحاضنة.")
-                    flash(f"تم حفظ الجدول ومشاركته حصرياً مع {dean_label}!")
-                else:
-                    recipients = users_by_filter(role="INCUBATOR")
-                    notify(recipients, f"قام {dean_label} بتحديث ومشاركة جدول المشاريع.")
-                    flash("تم حفظ الجدول ومشاركته مع مدير الحاضنة!")
-                st.rerun()
-
-    with col_b3:
+    with col_b2:
         xlsx_export = df_to_xlsx_bytes(edited_df, sheet_name=faculty_name)
         st.download_button(
             "📗 تحميل بصيغة Excel",
@@ -762,7 +716,7 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
             use_container_width=True,
         )
 
-    with col_b4:
+    with col_b3:
         pdf_export = df_to_pdf_bytes(edited_df, faculty_name)
         st.download_button(
             "📕 تحميل بصيغة PDF",
@@ -777,7 +731,7 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
     st.markdown(f"### 📎 الوثائق المتبادلة الخاصة بـ {faculty_name}")
 
     if can_manage_faculty:
-        with st.expander(f"⬆️ إرسال ملف إضافي (PDF / Excel) لـ {dean_label if is_incubator else 'مدير الحاضنة'}", expanded=False):
+        with st.expander(f"⬆️ إرسال ملف إضافي (PDF / Excel)", expanded=False):
             with st.form(f"doc_form_{tab_idx}", clear_on_submit=True):
                 d_file = st.file_uploader(f"اختر ملف (حد أقصى {MAX_DOC_MB} ميغابايت)", type=ALLOWED_DOC_EXT, key=f"doc_file_{tab_idx}")
                 d_title = st.text_input("عنوان الوثيقة", key=f"doc_title_{tab_idx}")
@@ -796,14 +750,11 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
                             doc_title = d_title.strip() or d_file.name
                             ex(
                                 """INSERT INTO documents (title, filename, file_ext, file_data,
-                                                          project_id, target_faculty, uploaded_by, created_at)
-                                   VALUES (?,?,?,?,?,?,?,?)""",
-                                (doc_title, d_file.name, ext, data, None, faculty_name, current_user["id"], now_str()),
+                                                          target_faculty, uploaded_by, created_at)
+                                   VALUES (?,?,?,?,?,?)""",
+                                (doc_title, d_file.name, ext, data, faculty_name, current_user["id"], now_str()),
                             )
-                            if is_incubator:
-                                notify(users_by_filter(role="VICE_DEAN", faculty=faculty_name), f"وثيقة جديدة موجهة لـ {faculty_name}: {doc_title}")
-                            else:
-                                notify(users_by_filter(role="INCUBATOR"), f"وثيقة جديدة من {dean_label}: {doc_title}")
+                            notify(users_by_filter(role="VICE_DEAN", faculty=faculty_name), f"وثيقة جديدة موجهة لـ {faculty_name}: {doc_title}")
                             flash("تم إرسال الملف بنجاح.")
                             st.rerun()
 
@@ -832,7 +783,7 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
                 mime=DOC_MIME.get(d["file_ext"], "application/octet-stream"),
                 key=f"dl_doc_{tab_idx}_{d['id']}",
             )
-            if is_incubator or current_user["id"] == d["uploaded_by"]:
+            if is_incubator:
                 if col_del.button("🗑️", key=f"del_doc_{tab_idx}_{d['id']}"):
                     ex("DELETE FROM documents WHERE id=?", (d["id"],))
                     flash("تم الحذف.", "🗑️")
@@ -843,14 +794,24 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
 # 5. الواجهة العامة وتسجيل الدخول
 # ==========================================
 st.set_page_config(page_title="منصة التكامل البيداغوجي والابتكار", layout="wide")
+
 st.markdown(
-    """<style>
+    """
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
     .stApp, .stMarkdown, .stTextInput, .stTextArea, .stSelectbox, .stAlert,
-    [data-testid="stExpander"] { direction: rtl; text-align: right; }
-    </style>""",
+    [data-testid="stExpander"] { direction: rtl; text-align: right; font-family: Tahoma, sans-serif; }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
-st.title("🎓 منصة التكامل بين حاضنة الأعمال الجامعية ومصالح البيداغوجيا")
+
+st.markdown("""
+    <div class="p-6 mb-6 bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-2xl shadow-lg">
+        <h1 class="text-3xl font-bold mb-2">🎓 منصة التكامل بين مدير حاضنة ومصالح البيداغوجيا</h1>
+        <p class="text-blue-200">إدارة ومتابعة المشاريع الابتكارية والوثائق بمديرية الحاضنة والكليات الجامعية.</p>
+    </div>
+""", unsafe_allow_html=True)
 
 if "_flash" in st.session_state:
     _msg, _icon = st.session_state.pop("_flash")
@@ -878,7 +839,26 @@ selected_id = st.sidebar.selectbox(
 )
 current_user = user_map[selected_id]
 
+# التحقق من كلمة المرور لمدير الحاضنة (123456789)
 if current_user["role"] == "INCUBATOR":
+    if "incubator_authenticated" not in st.session_state:
+        st.session_state["incubator_authenticated"] = False
+
+    if not st.session_state["incubator_authenticated"]:
+        pwd_input = st.sidebar.text_input("أدخل كلمة مرور مدير حاضنة:", type="password")
+        if st.sidebar.button("تسجيل الدخول كمدير حاضنة"):
+            if pwd_input == "123456789":
+                st.session_state["incubator_authenticated"] = True
+                flash("تم تسجيل الدخول بنجاح.")
+                st.rerun()
+            else:
+                st.sidebar.error("كلمة المرور غير صحيحة!")
+        st.stop()
+    else:
+        if st.sidebar.button("🚪 تسجيل الخروج"):
+            st.session_state["incubator_authenticated"] = False
+            st.rerun()
+
     with st.sidebar.expander("➕ فتح موسم جامعي جديد"):
         new_season_input = st.text_input("أدخل سنة الموسم (مثال: 2026/2027)")
         if st.button("تفعيل واعتماد موسم جديد"):
@@ -927,7 +907,11 @@ tabs = st.tabs([
 # التبويب 0: مؤشر المشاريع الابتكارية
 # ------------------------------------------
 with tabs[0]:
-    st.subheader(f"📊 مؤشر المشاريع الابتكارية الحية (الموسم النشط: {selected_season})")
+    st.markdown(f"""
+        <div class="p-4 mb-4 bg-indigo-50 border-r-4 border-indigo-600 rounded-lg shadow-sm">
+            <h2 class="text-xl font-bold text-indigo-900">📊 مؤشر المشاريع الابتكارية الحية (الموسم النشط: {selected_season})</h2>
+        </div>
+    """, unsafe_allow_html=True)
 
     total_projects_current = sum(get_faculty_project_count(fac, selected_season) for fac in FACULTIES)
     total_all_seasons = q("SELECT COUNT(*) AS n FROM faculty_sheets WHERE TRIM(project_name) != ''", one=True)["n"]
@@ -989,7 +973,12 @@ with tabs[4]:
 # التبويب 5: مكتبة الموارد المشتركة
 # ------------------------------------------
 with tabs[5]:
-    st.subheader("📚 مكتبة الموارد والوثائق المشتركة")
+    st.markdown("""
+        <div class="p-4 mb-4 bg-emerald-50 border-r-4 border-emerald-600 rounded-lg shadow-sm">
+            <h2 class="text-xl font-bold text-emerald-900">📚 مكتبة الموارد والوثائق المشتركة</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
     with st.form("res_form", clear_on_submit=True):
         r_title = st.text_input("عنوان المورد")
         r_cat = st.selectbox("التصنيف", RESOURCE_CATEGORIES)
