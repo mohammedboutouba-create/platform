@@ -8,15 +8,15 @@ from datetime import datetime, date
 from urllib.parse import urlparse
 from xml.sax.saxutils import escape
 
-import altair as alt
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
 # 0. الثوابت والتسميات والكليات المعتمدة
 # ==========================================
-DB_PATH = "university_integrated_platform_v15.db"
+DB_PATH = "university_integrated_platform_v26.db"
 
 FACULTIES = [
     "كلية العلوم والتكنولوجيا",
@@ -24,6 +24,9 @@ FACULTIES = [
     "كلية الآداب واللغات والعلوم الاجتماعية",
     "كلية الحقوق",
 ]
+
+# ألوان مخصصة تغطي كامل عبارات الكليات في الرسوم البيانية
+FACULTY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
 
 ROLE_LABELS = {
     "INCUBATOR": "مدير حاضنة",
@@ -365,7 +368,7 @@ def df_to_pdf_bytes(df: pd.DataFrame, faculty_name: str) -> bytes:
     draw = ImageDraw.Draw(img)
 
     draw.rectangle([margin, 35, page_w - margin, 125], fill=(24, 62, 115))
-    title_txt = _rtl_visual(f"قائمة المشاريع الابتكارية - {faculty_name}")
+    title_txt = _rtl_visual(f"قائمة المشاريع الابتكارية\n{faculty_name}")
     sub_txt = _rtl_visual(f"تاريخ الاستخراج: {now_str()} | مدير حاضنة")
     draw.text((page_w - margin - 25, 50), title_txt, font=font_title, fill="white", anchor="ra")
     draw.text((page_w - margin - 25, 90), sub_txt, font=font_sub, fill=(220, 232, 245), anchor="ra")
@@ -610,18 +613,17 @@ def get_faculty_project_count(faculty_name: str, season: str) -> int:
 # ==========================================
 def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
     st.markdown(f"""
-        <div class="p-4 mb-4 bg-blue-50 border-r-4 border-blue-600 rounded-lg shadow-sm">
+        <div class="p-4 mb-4 bg-blue-50 border-r-4 border-blue-600 rounded-lg shadow-sm text-center">
             <h3 class="text-lg font-bold text-blue-900">🏛️ فضاء مشاريع {faculty_name} (الموسم: {active_season})</h3>
             <p class="text-sm text-gray-600">إدارة الجداول والمشاريع الابتكارية الخاصة بالكلية.</p>
         </div>
     """, unsafe_allow_html=True)
 
-    role = current_user["role"]
-    is_incubator = role == "INCUBATOR"
+    is_incubator = current_user["role"] == "INCUBATOR"
     can_manage_faculty = is_incubator
 
     if not is_incubator:
-        st.info("ℹ️ أنت مسجل بصلاحية نائب العميد (قراءة واطلاع وتصدير فقط). التعديل والإضافة متاحان حصرياً لمدير الحاضنة.")
+        st.info("ℹ️ أنت تطلع على الفضاء بصلاحية نائب العميد (قراءة واطلاع وتصدير فقط).")
 
     if can_manage_faculty:
         with st.expander(f"📥 استيراد ملف Excel وتعديل جدول {faculty_name}", expanded=False):
@@ -656,8 +658,13 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
                                     save_faculty_df(faculty_name, active_season, imported_df, current_user["name"])
 
                                 st.session_state[f"grid_ver_{tab_idx}"] = (
-                                    st.session_state.get(f"grid_ver_{tab_idx}", 0) + 1
+                                        st.session_state.get(f"grid_ver_{tab_idx}", 0) + 1
                                 )
+
+                                vice_deans = users_by_filter(role="VICE_DEAN", faculty=faculty_name)
+                                notify(vice_deans,
+                                       f"تم تحديث بيانات جدول المشاريع في {faculty_name} من قبل مدير الحاضنة.")
+
                                 flash(f"تم استيراد {len(imported_df)} سطراً بنجاح!")
                                 st.rerun()
                         except Exception as e:
@@ -695,13 +702,16 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
         },
     )
 
-    # تم حذف زر مشاركة الجدول تماماً بناءً على طلبك
     col_b1, col_b2, col_b3 = st.columns([1.5, 1.5, 1.5])
 
     if can_manage_faculty:
         with col_b1:
             if st.button("💾 حفظ الجدول", key=f"save_sheet_{tab_idx}", use_container_width=True):
                 save_faculty_df(faculty_name, active_season, edited_df, current_user["name"])
+
+                vice_deans = users_by_filter(role="VICE_DEAN", faculty=faculty_name)
+                notify(vice_deans, f"تم حفظ وتحديث جدول المشاريع لـ {faculty_name}.")
+
                 flash("تم حفظ التعديلات.")
                 st.rerun()
 
@@ -728,12 +738,14 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
         )
 
     st.markdown("---")
-    st.markdown(f"### 📎 الوثائق المتبادلة الخاصة بـ {faculty_name}")
+    st.markdown(f"<h3 class='text-center font-bold text-gray-800'>📎 الوثائق المتبادلة الخاصة بـ {faculty_name}</h3>",
+                unsafe_allow_html=True)
 
     if can_manage_faculty:
         with st.expander(f"⬆️ إرسال ملف إضافي (PDF / Excel)", expanded=False):
             with st.form(f"doc_form_{tab_idx}", clear_on_submit=True):
-                d_file = st.file_uploader(f"اختر ملف (حد أقصى {MAX_DOC_MB} ميغابايت)", type=ALLOWED_DOC_EXT, key=f"doc_file_{tab_idx}")
+                d_file = st.file_uploader(f"اختر ملف (حد أقصى {MAX_DOC_MB} ميغابايت)", type=ALLOWED_DOC_EXT,
+                                          key=f"doc_file_{tab_idx}")
                 d_title = st.text_input("عنوان الوثيقة", key=f"doc_title_{tab_idx}")
 
                 if st.form_submit_button("إرسال وحفظ الملف"):
@@ -754,7 +766,9 @@ def render_faculty_hub(faculty_name: str, tab_idx: int, active_season: str):
                                    VALUES (?,?,?,?,?,?)""",
                                 (doc_title, d_file.name, ext, data, faculty_name, current_user["id"], now_str()),
                             )
-                            notify(users_by_filter(role="VICE_DEAN", faculty=faculty_name), f"وثيقة جديدة موجهة لـ {faculty_name}: {doc_title}")
+                            vice_deans = users_by_filter(role="VICE_DEAN", faculty=faculty_name)
+                            notify(vice_deans, f"وثيقة جديدة موجهة لكلية {faculty_name}: {doc_title}")
+
                             flash("تم إرسال الملف بنجاح.")
                             st.rerun()
 
@@ -807,9 +821,9 @@ st.markdown(
 )
 
 st.markdown("""
-    <div class="p-6 mb-6 bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-2xl shadow-lg">
-        <h1 class="text-3xl font-bold mb-2">🎓 منصة التكامل بين مدير حاضنة ومصالح البيداغوجيا</h1>
-        <p class="text-blue-200">إدارة ومتابعة المشاريع الابتكارية والوثائق بمديرية الحاضنة والكليات الجامعية.</p>
+    <div class="p-6 mb-6 bg-gradient-to-r from-blue-900 to-indigo-800 text-white rounded-2xl shadow-lg text-center">
+        <h1 class="text-3xl font-bold mb-2">🎓 منصة التكامل بين حاضنة الأعمال ومصالح البيداغوجيا</h1>
+        <p class="text-blue-200">إدارة ومتابعة المشاريع الابتكارية بين حاضنة الأعمال والكليات الجامعية.</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -821,43 +835,41 @@ seasons_rows = q("SELECT season_year, is_active FROM academic_seasons ORDER BY i
 seasons_list = [r["season_year"] for r in seasons_rows]
 active_season = get_active_season()
 
-st.sidebar.header("⚙️ إدارة المواسم والبوابة")
+st.sidebar.header("⚙️ حاضنة الأعمال جامعة عين تموشنت")
 
 selected_season = st.sidebar.selectbox(
-    "📅 الموسم الجامعي الحالي:",
+    "📅 الموسم الجامعي :",
     seasons_list,
     index=seasons_list.index(active_season) if active_season in seasons_list else 0,
 )
 
-all_users = q("SELECT * FROM users ORDER BY id")
-user_map = {u["id"]: u for u in all_users}
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔐 بوابة مدير الحاضنة")
 
-selected_id = st.sidebar.selectbox(
-    "🔐 المسؤول الحالي:",
-    list(user_map.keys()),
-    format_func=lambda i: f"{user_map[i]['name']} ({user_map[i]['faculty']})",
-)
-current_user = user_map[selected_id]
+pwd_input = st.sidebar.text_input("أدخل كلمة مرور مدير الحاضنة:", type="password")
 
-# التحقق من كلمة المرور لمدير الحاضنة (123456789)
-if current_user["role"] == "INCUBATOR":
-    if "incubator_authenticated" not in st.session_state:
-        st.session_state["incubator_authenticated"] = False
+if "incubator_authenticated" not in st.session_state:
+    st.session_state["incubator_authenticated"] = False
 
-    if not st.session_state["incubator_authenticated"]:
-        pwd_input = st.sidebar.text_input("أدخل كلمة مرور مدير حاضنة:", type="password")
-        if st.sidebar.button("تسجيل الدخول كمدير حاضنة"):
-            if pwd_input == "123456789":
-                st.session_state["incubator_authenticated"] = True
-                flash("تم تسجيل الدخول بنجاح.")
-                st.rerun()
-            else:
-                st.sidebar.error("كلمة المرور غير صحيحة!")
-        st.stop()
-    else:
-        if st.sidebar.button("🚪 تسجيل الخروج"):
-            st.session_state["incubator_authenticated"] = False
+if not st.session_state["incubator_authenticated"]:
+    if st.sidebar.button("تسجيل الدخول كمدير حاضنة"):
+        if pwd_input == "123456789":
+            st.session_state["incubator_authenticated"] = True
+            flash("تم تسجيل الدخول بنجاح.")
             st.rerun()
+        else:
+            st.sidebar.error("كلمة المرور غير صحيحة!")
+
+    incubator_user = q("SELECT * FROM users WHERE role='INCUBATOR' LIMIT 1", one=True)
+    current_user = incubator_user
+    st.sidebar.info("ℹ️ أنت في وضع الاطلاع العام (يتطلب تسجيل الدخول بكلمة المرور لتفعيل الصلاحيات الكاملة).")
+else:
+    incubator_user = q("SELECT * FROM users WHERE role='INCUBATOR' LIMIT 1", one=True)
+    current_user = incubator_user
+    st.sidebar.success("✅ مسجل كـ: مدير الحاضنة")
+    if st.sidebar.button("🚪 تسجيل الخروج"):
+        st.session_state["incubator_authenticated"] = False
+        st.rerun()
 
     with st.sidebar.expander("➕ فتح موسم جامعي جديد"):
         new_season_input = st.text_input("أدخل سنة الموسم (مثال: 2026/2027)")
@@ -879,14 +891,14 @@ if current_user["role"] == "INCUBATOR":
                 st.sidebar.warning("يرجى إدخال صيغة صحيحة.")
 
 st.sidebar.markdown("---")
-unread = q("SELECT * FROM notifications WHERE user_id=? AND is_read=0 ORDER BY id DESC", (current_user["id"],))
-with st.sidebar.expander(f"🔔 الإشعارات ({len(unread)})", expanded=bool(unread)):
+unread = q("SELECT * FROM notifications WHERE is_read=0 ORDER BY id DESC LIMIT 10")
+with st.sidebar.expander(f"🔔 الإشعارات الواردة ({len(unread)})", expanded=bool(unread)):
     if unread:
-        for n in unread[:10]:
+        for n in unread:
             st.write(f"• {n['message']}")
             st.caption(n["created_at"])
         if st.button("تعليم الكل كمقروء", key="read_all"):
-            ex("UPDATE notifications SET is_read=1 WHERE user_id=?", (current_user["id"],))
+            ex("UPDATE notifications SET is_read=1")
             st.rerun()
     else:
         st.caption("لا توجد إشعارات جديدة.")
@@ -908,7 +920,7 @@ tabs = st.tabs([
 # ------------------------------------------
 with tabs[0]:
     st.markdown(f"""
-        <div class="p-4 mb-4 bg-indigo-50 border-r-4 border-indigo-600 rounded-lg shadow-sm">
+        <div class="p-4 mb-4 bg-indigo-50 border-r-4 border-indigo-600 rounded-lg shadow-sm text-center">
             <h2 class="text-xl font-bold text-indigo-900">📊 مؤشر المشاريع الابتكارية الحية (الموسم النشط: {selected_season})</h2>
         </div>
     """, unsafe_allow_html=True)
@@ -922,18 +934,22 @@ with tabs[0]:
     col_sum3.metric("الموسم الجامعي المفعل حالياً", selected_season)
 
     st.markdown("---")
-    st.markdown(f"#### 🏛️ توزيع المشاريع الحقيقية حسب الكليات (لموسم {selected_season})")
+    st.markdown(
+        f"<h4 class='text-center font-bold text-gray-700'>🏛️ توزيع المشاريع الحقيقية حسب الكليات (لموسم {selected_season})</h4>",
+        unsafe_allow_html=True)
 
     fac_cols = st.columns(4)
     for idx, fac_name in enumerate(FACULTIES):
         fac_count = get_faculty_project_count(fac_name, selected_season)
         with fac_cols[idx]:
             with st.container(border=True):
-                st.markdown(f"**🎓 {fac_name}**")
+                st.markdown(f"<div class='text-center'><b>🎓 {fac_name}</b></div>", unsafe_allow_html=True)
                 st.metric("عدد المشاريع المسجلة", f"{fac_count} مشروع")
 
     st.markdown("---")
-    st.markdown(f"#### 🍩 الدائرة النسبية لتوزيع المشاريع الابتكارية حسب الكليات (موسم {selected_season})")
+    st.markdown(
+        f"<h4 class='text-center font-bold text-gray-700'>📊 مؤشر توزيع المشاريع الابتكارية (موسم {selected_season})</h4>",
+        unsafe_allow_html=True)
 
     chart_data = []
     for fac_name in FACULTIES:
@@ -942,17 +958,25 @@ with tabs[0]:
     df_chart = pd.DataFrame(chart_data)
 
     if df_chart["عدد المشاريع"].sum() > 0:
-        base = alt.Chart(df_chart).encode(
-            theta=alt.Theta(field="عدد المشاريع", type="quantitative"),
-            color=alt.Color(field="الكلية", type="nominal", legend=alt.Legend(title="الكليات")),
-            tooltip=["الكلية", "عدد المشاريع"]
+        fig = px.bar(df_chart, x="عدد المشاريع", y="الكلية", orientation='h', color="الكلية", color_discrete_sequence=FACULTY_COLORS, text="عدد المشاريع")
+        fig.update_layout(
+            yaxis=dict(
+                automargin=True, # تفعيل الهامش التلقائي لمنع التداخل
+            ),
+            margin=dict(
+                l=200,  # زيادة الهامش الأيسر (Left Margin) لتوفير مساحة للنص
+                r=20,
+                t=50,
+                b=50
+            ),
+            showlegend=False,
+            xaxis_title="عدد المشاريع الابتكارية",
+            yaxis_title=None
         )
-        pie = base.mark_arc(innerRadius=80, outerRadius=140)
-        text = base.mark_text(radius=160, size=14).encode(text=alt.Text("عدد المشاريع:Q"))
-        chart = (pie + text).properties(width=500, height=350)
-        st.altair_chart(chart, use_container_width=True)
+        fig.update_traces(textposition='outside')
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("لا توجد مشاريع مسجلة في هذا الموسم لعرضها في الدائرة النسبية.")
+        st.info("لا توجد مشاريع مسجلة في هذا الموسم لعرضها في المؤشر.")
 
 # ------------------------------------------
 # التبويبات 1 إلى 4: فضاءات الكليات الأربع
@@ -974,32 +998,38 @@ with tabs[4]:
 # ------------------------------------------
 with tabs[5]:
     st.markdown("""
-        <div class="p-4 mb-4 bg-emerald-50 border-r-4 border-emerald-600 rounded-lg shadow-sm">
+        <div class="p-4 mb-4 bg-emerald-50 border-r-4 border-emerald-600 rounded-lg shadow-sm text-center">
             <h2 class="text-xl font-bold text-emerald-900">📚 مكتبة الموارد والوثائق المشتركة</h2>
         </div>
     """, unsafe_allow_html=True)
 
-    with st.form("res_form", clear_on_submit=True):
-        r_title = st.text_input("عنوان المورد")
-        r_cat = st.selectbox("التصنيف", RESOURCE_CATEGORIES)
-        r_link = st.text_input("رابط التحميل", "https://")
-        if st.form_submit_button("إضافة للمكتبة"):
-            if not r_title.strip():
-                st.warning("أدخل العنوان.")
-            elif not valid_url(r_link):
-                st.warning("رابط غير صالح.")
-            else:
-                ex("INSERT INTO resources (title, category, link, uploaded_by) VALUES (?,?,?,?)", (r_title.strip(), r_cat, r_link.strip(), current_user["id"]))
-                flash("تمت الإضافة.")
-                st.rerun()
+    is_incubator = current_user["role"] == "INCUBATOR"
 
-    resources = q("SELECT r.*, u.name AS uploader FROM resources r JOIN users u ON u.id = r.uploaded_by ORDER BY r.category, r.id DESC")
+    if is_incubator:
+        with st.form("res_form", clear_on_submit=True):
+            r_title = st.text_input("عنوان المورد")
+            r_cat = st.selectbox("التصنيف", RESOURCE_CATEGORIES)
+            r_link = st.text_input("رابط التحميل", "https://")
+            if st.form_submit_button("إضافة للمكتبة"):
+                if not r_title.strip():
+                    st.warning("أدخل العنوان.")
+                elif not valid_url(r_link):
+                    st.warning("رابط غير صالح.")
+                else:
+                    ex("INSERT INTO resources (title, category, link, uploaded_by) VALUES (?,?,?,?)",
+                       (r_title.strip(), r_cat, r_link.strip(), current_user["id"]))
+                    notify(users_by_filter(role="VICE_DEAN"), f"تمت إضافة مورد جديد للمكتبة: {r_title.strip()}")
+                    flash("تمت الإضافة.")
+                    st.rerun()
+
+    resources = q(
+        "SELECT r.*, u.name AS uploader FROM resources r JOIN users u ON u.id = r.uploaded_by ORDER BY r.category, r.id DESC")
     if not resources:
         st.caption("لا توجد موارد.")
     for r in resources:
         col_txt, col_del = st.columns([6, 1])
         col_txt.markdown(f"- 📄 **{r['title']}** ({r['category']}) - [تحميل]({r['link']}) | *بواسطة: {r['uploader']}*")
-        if current_user["role"] == "INCUBATOR" or current_user["id"] == r["uploaded_by"]:
+        if is_incubator:
             if col_del.button("🗑️", key=f"del_res_{r['id']}"):
                 ex("DELETE FROM resources WHERE id=?", (r["id"],))
                 flash("تم الحذف.", "🗑️")
